@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  # Redis for rate limiting and caching
+  redis:
+    image: redis:7-alpine
+    container_name: performance-review-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 100mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Optional: Redis Commander for debugging (comment out in production)
+  # redis-commander:
+  #   image: rediscommander/redis-commander:latest
+  #   container_name: performance-review-redis-commander
+  #   environment:
+  #     - REDIS_HOSTS=local:redis:6379
+  #   ports:
+  #     - "8081:8081"
+  #   depends_on:
+  #     - redis
+
+  # The Next.js app itself (optional - you can also run it outside Docker)
+  # app:
+  #   build: .
+  #   container_name: performance-review-app
+  #   restart: unless-stopped
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - REDIS_URL=redis://redis:6379
+  #     - NODE_ENV=production
+  #   env_file:
+  #     - .env.local
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
+
+volumes:
+  redis_data:
+    driver: local
+
+# Networks (optional, for isolation)
+# networks:
+#   performance-review:
+#     driver: bridge
+
+
+
+
+
+
+

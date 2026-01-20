@@ -24,3 +24,18 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Input text contrast fix */
+input,
+textarea,
+select {
+  color: #111827;
+  /* gray-900 - strong contrast for readability */
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #6b7280;
+  /* gray-500 - visible but not overwhelming */
+  opacity: 1;
+}

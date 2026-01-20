@@ -1,44 +1,46 @@
-import { NextRequest, NextResponse } from 'next/server';
 import { Octokit } from '@octokit/rest';
 import { parseISO, isAfter, isBefore } from 'date-fns';
+import { DataSourceConfig, ContributionData, PullRequest, Issue, Review, Commit } from '@/app/types';
+import { DataSourceAdapter, DateRange, ValidationResult, ProgressCallback } from './types';
 
-export const maxDuration = 300; // 5 minutes max for Vercel
+export class GitHubAdapter implements DataSourceAdapter {
+  readonly name = 'github' as const;
 
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-    const { organization, startDate, endDate, githubToken, username } = body;
-
-    if (!startDate || !endDate || !username) {
-      return NextResponse.json(
-        { error: 'Missing required parameters: startDate, endDate, and username are required' },
-        { status: 400 }
-      );
+  validateConfig(config: DataSourceConfig): ValidationResult {
+    if (!config.username) {
+      return { valid: false, error: 'GitHub username is required' };
     }
+    return { valid: true };
+  }
 
+  async fetchContributions(
+    config: DataSourceConfig,
+    dateRange: DateRange,
+    onProgress?: ProgressCallback
+  ): Promise<ContributionData> {
     const octokit = new Octokit({
-      auth: githubToken || undefined,
+      auth: config.token || undefined,
     });
 
-    const start = parseISO(startDate);
-    const end = parseISO(endDate);
+    const start = parseISO(dateRange.start);
+    const end = parseISO(dateRange.end);
+    const { username, organization } = config;
 
     const reposWithActivity = new Set<string>();
-    const contributions = {
-      pullRequests: [] as any[],
-      issues: [] as any[],
-      reviews: [] as any[],
-      commits: [] as any[],
+    const contributions: ContributionData = {
+      pullRequests: [],
+      issues: [],
+      reviews: [],
+      commits: [],
+      tickets: [],
     };
 
-    console.log(`Searching for ${username}'s activity${organization ? ` in ${organization}` : ''}...`);
-
-    // Build search query based on whether organization is provided
     const orgFilter = organization ? `org:${organization}` : '';
 
-    // Search for Pull Requests by user
+    // Search for Pull Requests
+    onProgress?.({ stage: 'pullRequests', current: 0 });
     try {
-      const prQuery = `type:pr author:${username} ${orgFilter} created:${startDate}..${endDate} is:pr`.trim();
+      const prQuery = `type:pr author:${username} ${orgFilter} created:${dateRange.start}..${dateRange.end} is:pr`.trim();
       let prSearchPage = 1;
       let hasMorePRs = true;
 
@@ -49,6 +51,8 @@ export async function POST(request: NextRequest) {
           page: prSearchPage,
         });
 
+        onProgress?.({ stage: 'pullRequests', current: contributions.pullRequests.length, total: prSearchResults.total_count });
+
         for (const pr of prSearchResults.items) {
           const repoMatch = pr.repository_url.match(/\/repos\/([^/]+)\/([^/]+)$/);
           if (repoMatch) {
@@ -56,7 +60,7 @@ export async function POST(request: NextRequest) {
             const repoName = repoMatch[2];
             const fullRepoName = `${owner}/${repoName}`;
             reposWithActivity.add(fullRepoName);
-            
+
             try {
               const { data: fullPR } = await octokit.pulls.get({
                 owner,
@@ -64,7 +68,7 @@ export async function POST(request: NextRequest) {
                 pull_number: pr.number,
               });
 
-              contributions.pullRequests.push({
+              const pullRequest: PullRequest = {
                 title: fullPR.title,
                 number: fullPR.number,
                 state: fullPR.state === 'closed' && fullPR.merged_at ? 'merged' : fullPR.state,
@@ -75,7 +79,9 @@ export async function POST(request: NextRequest) {
                 additions: fullPR.additions,
                 deletions: fullPR.deletions,
                 changedFiles: fullPR.changed_files,
-              });
+                source: 'github',
+              };
+              contributions.pullRequests.push(pullRequest);
             } catch (error) {
               console.error(`Error fetching PR details for ${fullRepoName}#${pr.number}:`, error);
             }
@@ -86,13 +92,14 @@ export async function POST(request: NextRequest) {
         prSearchPage++;
         if (prSearchPage > 10) break;
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error searching PRs:', error);
     }
 
-    // Search for Issues by user
+    // Search for Issues
+    onProgress?.({ stage: 'issues', current: 0 });
     try {
-      const issueQuery = `type:issue author:${username} ${orgFilter} created:${startDate}..${endDate}`.trim();
+      const issueQuery = `type:issue author:${username} ${orgFilter} created:${dateRange.start}..${dateRange.end}`.trim();
       let issueSearchPage = 1;
       let hasMoreIssues = true;
 
@@ -103,6 +110,8 @@ export async function POST(request: NextRequest) {
           page: issueSearchPage,
         });
 
+        onProgress?.({ stage: 'issues', current: contributions.issues.length, total: issueSearchResults.total_count });
+
         for (const issue of issueSearchResults.items) {
           const repoMatch = issue.repository_url.match(/\/repos\/([^/]+)\/([^/]+)$/);
           if (repoMatch) {
@@ -111,7 +120,7 @@ export async function POST(request: NextRequest) {
             const fullRepoName = `${owner}/${repoName}`;
             reposWithActivity.add(fullRepoName);
 
-            contributions.issues.push({
+            const issueData: Issue = {
               title: issue.title,
               number: issue.number,
               state: issue.state,
@@ -119,7 +128,9 @@ export async function POST(request: NextRequest) {
               createdAt: issue.created_at,
               repo: organization ? repoName : fullRepoName,
               comments: issue.comments,
-            });
+              source: 'github',
+            };
+            contributions.issues.push(issueData);
           }
         }
 
@@ -127,43 +138,17 @@ export async function POST(request: NextRequest) {
         issueSearchPage++;
         if (issueSearchPage > 10) break;
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error searching issues:', error);
     }
 
-    const reposToProcess = Array.from(reposWithActivity);
-    console.log(`Found ${reposToProcess.length} repositories with activity`);
-
-    if (reposToProcess.length === 0) {
-      return NextResponse.json({
-        contributions,
-        stats: {
-          totalPRs: 0,
-          mergedPRs: 0,
-          openPRs: 0,
-          closedPRs: 0,
-          totalIssues: 0,
-          openIssues: 0,
-          closedIssues: 0,
-          totalReviews: 0,
-          approvedReviews: 0,
-          totalCommits: 0,
-          totalAdditions: 0,
-          totalDeletions: 0,
-          reposContributed: 0,
-        },
-        dateRange: { start: startDate, end: endDate },
-        organization: organization || 'personal',
-      });
-    }
-
     // Fetch PR Reviews
-    console.log('Fetching PR reviews...');
+    onProgress?.({ stage: 'reviews', current: 0 });
     try {
-      const reviewQuery = `type:pr reviewed-by:${username} ${orgFilter} updated:${startDate}..${endDate}`.trim();
+      const reviewQuery = `type:pr reviewed-by:${username} ${orgFilter} updated:${dateRange.start}..${dateRange.end}`.trim();
       let reviewSearchPage = 1;
       let hasMoreReviewPRs = true;
-      const reviewedPRs = new Map<string, any>();
+      const reviewedPRs = new Map<string, { owner: string; repo: string; fullRepo: string; number: number; title: string; url: string }>();
 
       while (hasMoreReviewPRs) {
         const { data: reviewSearchResults } = await octokit.search.issuesAndPullRequests({
@@ -197,6 +182,7 @@ export async function POST(request: NextRequest) {
         if (reviewSearchPage > 10) break;
       }
 
+      let reviewCount = 0;
       for (const prData of Array.from(reviewedPRs.values()).slice(0, 100)) {
         try {
           const { data: reviews } = await octokit.pulls.listReviews({
@@ -212,7 +198,7 @@ export async function POST(request: NextRequest) {
           for (const review of userReviews) {
             const reviewDate = parseISO(review.submitted_at || '');
             if (review.submitted_at && isAfter(reviewDate, start) && isBefore(reviewDate, end)) {
-              contributions.reviews.push({
+              const reviewData: Review = {
                 state: review.state,
                 body: review.body,
                 url: review.html_url,
@@ -221,19 +207,24 @@ export async function POST(request: NextRequest) {
                 prNumber: prData.number,
                 prTitle: prData.title,
                 prUrl: prData.url,
-              });
+                source: 'github',
+              };
+              contributions.reviews.push(reviewData);
+              reviewCount++;
+              onProgress?.({ stage: 'reviews', current: reviewCount });
             }
           }
         } catch (error) {
           console.error(`Error fetching reviews for ${prData.fullRepo}#${prData.number}:`, error);
         }
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error searching for reviewed PRs:', error);
     }
 
     // Fetch Commits
-    console.log('Fetching commits...');
+    onProgress?.({ stage: 'commits', current: 0 });
+    const reposToProcess = Array.from(reposWithActivity);
     for (const fullRepoName of reposToProcess) {
       const [owner, repoName] = fullRepoName.split('/');
       try {
@@ -245,28 +236,33 @@ export async function POST(request: NextRequest) {
             owner,
             repo: repoName,
             author: username,
-            since: startDate,
-            until: endDate,
+            since: dateRange.start,
+            until: dateRange.end,
             per_page: 100,
             page: commitPage,
           });
 
-          contributions.commits.push(
-            ...commits.map((commit) => ({
+          for (const commit of commits) {
+            const commitData: Commit = {
               sha: commit.sha,
               message: commit.commit.message,
               url: commit.html_url,
               createdAt: commit.commit.author?.date,
               repo: organization ? repoName : fullRepoName,
-            }))
-          );
+              source: 'github',
+            };
+            contributions.commits.push(commitData);
+          }
+
+          onProgress?.({ stage: 'commits', current: contributions.commits.length });
 
           hasMoreCommits = commits.length === 100;
           commitPage++;
           if (commitPage > 5) break;
         }
-      } catch (error: any) {
-        if (error.status === 403) {
+      } catch (error: unknown) {
+        const err = error as { status?: number };
+        if (err.status === 403) {
           console.error(`Access denied or rate limited for ${fullRepoName}`);
         } else {
           console.error(`Error fetching commits for ${fullRepoName}:`, error);
@@ -274,63 +270,15 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Calculate statistics
-    const stats = {
-      totalPRs: contributions.pullRequests.length,
-      mergedPRs: contributions.pullRequests.filter((pr) => pr.state === 'merged' || pr.mergedAt).length,
-      openPRs: contributions.pullRequests.filter((pr) => pr.state === 'open').length,
-      closedPRs: contributions.pullRequests.filter((pr) => pr.state === 'closed' && !pr.mergedAt).length,
-      totalIssues: contributions.issues.length,
-      openIssues: contributions.issues.filter((i) => i.state === 'open').length,
-      closedIssues: contributions.issues.filter((i) => i.state === 'closed').length,
-      totalReviews: contributions.reviews.length,
-      approvedReviews: contributions.reviews.filter((r) => r.state === 'APPROVED').length,
-      totalCommits: contributions.commits.length,
-      totalAdditions: contributions.pullRequests.reduce((sum, pr) => sum + (pr.additions || 0), 0),
-      totalDeletions: contributions.pullRequests.reduce((sum, pr) => sum + (pr.deletions || 0), 0),
-      reposContributed: new Set([
-        ...contributions.pullRequests.map((pr) => pr.repo),
-        ...contributions.issues.map((i) => i.repo),
-        ...contributions.reviews.map((r) => r.repo),
-        ...contributions.commits.map((c) => c.repo),
-      ]).size,
-    };
-
-    return NextResponse.json({
-      contributions,
-      stats,
-      dateRange: { start: startDate, end: endDate },
-      organization: organization || 'personal',
-    });
-  } catch (error: any) {
-    console.error('Error fetching GitHub data:', error);
-    
-    if (error.status === 403) {
-      return NextResponse.json(
-        { 
-          error: 'Rate limit exceeded or access denied. Please use a GitHub token to increase rate limits.',
-          details: error.message 
-        },
-        { status: 403 }
-      );
-    }
-    
-    if (error.status === 401) {
-      return NextResponse.json(
-        { 
-          error: 'Authentication failed. Please check your GitHub token.',
-          details: error.message 
-        },
-        { status: 401 }
-      );
-    }
-    
-    return NextResponse.json(
-      { 
-        error: error.message || 'Failed to fetch GitHub data',
-        details: error.response?.data?.message || 'Unknown error occurred'
-      },
-      { status: 500 }
-    );
+    return contributions;
   }
 }
+
+export const createGitHubAdapter = (): DataSourceAdapter => new GitHubAdapter();
+
+
+
+
+
+
+
