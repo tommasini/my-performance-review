@@ -101,7 +101,7 @@ export default function Donations({ showAfterReview = false }: DonationsProps) {
               Buy me a coffee
             </a>
             <a
-              href="https://github.com/sponsors/tomasfrancisco"
+              href="https://github.com/sponsors/tommasini"
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center justify-center gap-2 px-4 py-2.5 bg-[#24292e] text-white rounded-lg hover:bg-[#1a1e22] transition-colors font-medium text-sm"
