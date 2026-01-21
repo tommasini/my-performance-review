@@ -4,6 +4,9 @@ Generate compelling performance review answers powered by AI, using your actual 
 
 ![Performance Review AI](https://img.shields.io/badge/AI-Powered-blue) ![Next.js](https://img.shields.io/badge/Next.js-16-black) ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue) ![Redis](https://img.shields.io/badge/Redis-Optional-red)
 
+[![Buy me a coffee](https://img.shields.io/badge/Buy_me_a_coffee-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/tommasini)
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-lightgrey?style=for-the-badge&logo=GitHub-Sponsors&logoColor=#ea4aaa)](https://github.com/sponsors/tommasini)
+
 ## ✨ Features
 
 - **🔗 Multi-Source Data Fetching**: Connect to GitHub, GitLab, Bitbucket, and Jira to aggregate all your contributions
