@@ -69,13 +69,9 @@ async function postToSlack(responseUrl: string, text: string, inChannel = true):
 function dateRangeForFrequency(frequency: 'daily' | 'weekly'): { startDate: string; endDate: string } {
   const now = new Date();
   const today = format(now, 'yyyy-MM-dd');
-  // Daily uses a 2-day lookback (2 days ago → today) to safely cover remote
-  // teams across all timezones: a UTC+14 / UTC-12 spread means "yesterday"
-  // can shift up to 2 calendar days relative to the server's UTC clock.
-  // Weekly uses 9 days for the same reason.
   const startDate = frequency === 'daily'
-    ? format(subDays(now, 2), 'yyyy-MM-dd')
-    : format(subDays(now, 9), 'yyyy-MM-dd');
+    ? format(subDays(now, 1), 'yyyy-MM-dd')
+    : format(subDays(now, 7), 'yyyy-MM-dd');
   return { startDate, endDate: today };
 }
 
@@ -120,7 +116,10 @@ export async function POST(request: NextRequest) {
   const params = new URLSearchParams(rawBody);
   const userId = params.get('user_id') ?? '';
   const userName = params.get('user_name') ?? '';
-  const text = (params.get('text') ?? '').trim().toLowerCase();
+  const rawText = (params.get('text') ?? '').trim();
+  // Lowercase only for command keyword matching — preserve original casing for values
+  // (tokens, org names, positions etc. are case-sensitive)
+  const text = rawText.toLowerCase();
   const responseUrl = params.get('response_url') ?? '';
 
   if (!userId || !responseUrl) {
@@ -168,7 +167,7 @@ export async function POST(request: NextRequest) {
 
   // ── setup ────────────────────────────────────────────────────────────────
   if (text.startsWith('setup')) {
-    const args = parseKVArgs(text);
+    const args = parseKVArgs(rawText);
 
     const required = ['github_username', 'github_token', 'frequency', 'company', 'position'];
     const missing = required.filter(k => !args[k]);
