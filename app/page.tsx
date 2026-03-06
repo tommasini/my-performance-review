@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { format, startOfYear } from 'date-fns';
 import { UserProfile, DataSourceConfig, FetchedData, ContributionData, ContributionStats, AppMode, StandupConfig } from './types';
 import ContributionsView from './components/ContributionsView';
@@ -213,6 +213,11 @@ export default function Home() {
     frequency: 'daily',
   });
 
+  // Session persistence
+  const hasHydrated = useRef(false);
+  const [sessionRestored, setSessionRestored] = useState(false);
+  const [sessionDismissed, setSessionDismissed] = useState(false);
+
   // Input mode state (fetch from APIs or manual input)
   const [inputMode, setInputMode] = useState<InputMode>('fetch');
   const [manualInput, setManualInput] = useState('');
@@ -253,7 +258,7 @@ export default function Home() {
     setCurrentStep(nextStep);
   };
 
-  // Initialize dates on client-side
+  // Initialize dates on client-side (perf review default: start of year → today)
   useEffect(() => {
     if (!startDate && !endDate) {
       const now = new Date();
@@ -261,6 +266,75 @@ export default function Home() {
       setEndDate(format(now, 'yyyy-MM-dd'));
     }
   }, [startDate, endDate]);
+
+  // Save session to localStorage whenever persistent state changes.
+  // Declared before the load effect so hasHydrated guard prevents overwriting
+  // saved data with blank defaults on the initial mount render.
+  useEffect(() => {
+    if (!hasHydrated.current) return;
+    try {
+      localStorage.setItem('prf-session', JSON.stringify({
+        profile,
+        dataSources,
+        claudeApiKey,
+        appMode,
+        standupFrequency: standupConfig.frequency,
+        standupCustomFormat: standupConfig.customFormat,
+        customQuestions,
+        companyValues,
+        additionalContext,
+      }));
+    } catch {
+      // Ignore localStorage errors (private browsing, quota exceeded, etc.)
+    }
+  }, [profile, dataSources, claudeApiKey, appMode, standupConfig.frequency, standupConfig.customFormat, customQuestions, companyValues, additionalContext]);
+
+  // Hydrate state from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('prf-session');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.profile) setProfile(parsed.profile);
+        if (parsed.dataSources) setDataSources(parsed.dataSources);
+        if (parsed.claudeApiKey) setClaudeApiKey(parsed.claudeApiKey);
+        if (parsed.appMode) setAppMode(parsed.appMode);
+        if (parsed.standupFrequency || parsed.standupCustomFormat !== undefined) {
+          setStandupConfig(prev => ({
+            ...prev,
+            frequency: parsed.standupFrequency ?? prev.frequency,
+            ...(parsed.standupCustomFormat !== undefined && { customFormat: parsed.standupCustomFormat }),
+          }));
+        }
+        if (parsed.customQuestions !== undefined) setCustomQuestions(parsed.customQuestions);
+        if (parsed.companyValues !== undefined) setCompanyValues(parsed.companyValues);
+        if (parsed.additionalContext !== undefined) setAdditionalContext(parsed.additionalContext);
+        setSessionRestored(true);
+      }
+    } catch {
+      // Ignore localStorage errors
+    }
+    hasHydrated.current = true;
+  }, []);
+
+  // Auto-calculate date range for standup mode based on frequency.
+  // Daily → yesterday→today; Weekly → 7 days ago→today.
+  useEffect(() => {
+    if (appMode === 'standup') {
+      const now = new Date();
+      const today = format(now, 'yyyy-MM-dd');
+      if (standupConfig.frequency === 'daily') {
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        setStartDate(format(yesterday, 'yyyy-MM-dd'));
+      } else {
+        const sevenDaysAgo = new Date(now);
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        setStartDate(format(sevenDaysAgo, 'yyyy-MM-dd'));
+      }
+      setEndDate(today);
+    }
+  }, [appMode, standupConfig.frequency]);
 
   const fetchData = async () => {
     // Find enabled data sources with required fields
@@ -466,6 +540,25 @@ export default function Home() {
         <div className="space-y-6">
           {currentStep === 'setup' && (
             <>
+              {sessionRestored && !sessionDismissed && (
+                <div className="flex items-center justify-between gap-3 px-4 py-3 bg-teal-50 border border-teal-200 rounded-xl text-sm text-teal-800">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-base flex-shrink-0">⚡</span>
+                    <span className="font-medium flex-shrink-0">Welcome back!</span>
+                    <span className="text-teal-700 truncate">Your previous session has been restored — just click through and generate.</span>
+                  </div>
+                  <button
+                    onClick={() => setSessionDismissed(true)}
+                    className="flex-shrink-0 text-teal-500 hover:text-teal-700 transition-colors"
+                    aria-label="Dismiss"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              )}
+
               <ProfileSetup
                 profile={profile}
                 setProfile={setProfile}

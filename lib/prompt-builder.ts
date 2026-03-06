@@ -213,19 +213,6 @@ ${companyValues ? `
 Now write a compelling, evidence-based answer that will make a strong impression on reviewers.`;
 }
 
-const DEFAULT_STANDUP_TEMPLATE_WITH_MILESTONE = `Milestone (link to epic/bug): {milestone}
-Original Target Date: {originalTargetDate}
-Target Date: {targetDate}
-Status: {status}
-Key updates and Risks: {keyUpdates}
-Next Steps: {nextSteps}
-PRs that need attention from the team: {prsNeedingAttention}`;
-
-const DEFAULT_STANDUP_TEMPLATE_NO_MILESTONE = `Status: {status}
-Key updates and Risks: {keyUpdates}
-Next Steps: {nextSteps}
-PRs that need attention from the team: {prsNeedingAttention}`;
-
 export function buildStandupPrompt(
   config: StandupConfig,
   contributions: ContributionData,
@@ -239,101 +226,98 @@ export function buildStandupPrompt(
   const openIssues = contributions.issues.filter(i => i.state === 'open');
   const recentCommits = getSignificantCommits(contributions.commits).slice(0, 10);
   const timeframe = frequency === 'daily' ? 'today' : 'this week';
-  const lookbackPeriod = frequency === 'daily' ? 'yesterday' : 'last week';
+  const lookbackPeriod = frequency === 'daily' ? 'yesterday' : 'this past week';
 
   const inProgressTickets = contributions.tickets.filter(
     t => t.status.toLowerCase().includes('progress') || t.status.toLowerCase().includes('review')
   );
 
-  // Build the template reference shown to the AI
-  let templateNote: string;
-  if (config.customFormat) {
-    templateNote = `The user has provided a custom standup format. Adapt the JSON fields to match it:\n${config.customFormat}`;
-  } else if (hasMilestone) {
-    templateNote = DEFAULT_STANDUP_TEMPLATE_WITH_MILESTONE
-      .replace('{milestone}', `${config.milestone}${config.epicLink ? ` ${config.epicLink}` : ''}`)
-      .replace('{originalTargetDate}', config.originalTargetDate || 'N/A')
-      .replace('{targetDate}', config.targetDate || 'N/A');
-  } else {
-    templateNote = DEFAULT_STANDUP_TEMPLATE_NO_MILESTONE;
-  }
+  // Build milestone header lines for the output template
+  const milestoneHeaderLines = hasMilestone
+    ? [
+        `Milestone (link to epic/bug): ${config.milestone}${config.epicLink ? ` ${config.epicLink}` : ''}`,
+        ...(config.originalTargetDate ? [`Original Target Date: ${config.originalTargetDate}`] : []),
+        ...(config.targetDate ? [`Target Date: ${config.targetDate}`] : []),
+      ].join('\n')
+    : '';
 
-  // Milestone section — only included when a milestone was provided
-  const milestoneSection = hasMilestone ? `
-═══════════════════════════════════════════════════════════════
-MILESTONE CONTEXT:
-═══════════════════════════════════════════════════════════════
-Milestone: ${config.milestone}${config.epicLink ? `\nEpic/Bug Link: ${config.epicLink}` : ''}${config.originalTargetDate ? `\nOriginal Target Date: ${config.originalTargetDate}` : ''}${config.targetDate ? `\nTarget Date: ${config.targetDate}` : ''}
-` : '';
-
-  // Scoping instruction — focus on milestone work vs. full breadth
+  // Scoping instruction
   const scopingInstruction = hasMilestone
     ? `Focus the analysis on work related to the milestone "${config.milestone}". Reference the target date when assessing status.`
-    : `No specific milestone was provided. Analyze ALL contributions across the period. Identify natural groupings or themes (e.g. by repo, feature area, or type of work — bug fixes, new features, reviews, etc.) and present "keyUpdates" grouped by theme where meaningful. Cover the full breadth of work done.`;
+    : `No specific milestone was provided. Analyze ALL contributions across the period. Identify natural groupings or themes (e.g. by repo, feature area, or type of work — bug fixes, new features, reviews, CI/CD, etc.). Present key updates grouped by theme where it adds clarity.`;
 
-  // Status determination guidance
+  // Status guidance
   const statusGuidance = hasMilestone
-    ? `- "on-track": Steady progress, no blockers, target date is achievable
-- "at-risk": PRs awaiting review, minor blockers, or tight deadline
-- "off-track": Significant blockers, missed deliverables, or target date clearly at risk`
-    : `- "on-track": Good output, no blockers, work is progressing well
-- "at-risk": Some open items or PRs waiting a long time for review
-- "off-track": Very little output, many open blockers, or sustained low activity`;
+    ? `🟢 On Track — steady progress, no blockers, target date is achievable
+🟡 At Risk — PRs awaiting review, minor blockers, or tight deadline
+🔴 Off Track — significant blockers, missed deliverables, or target date clearly at risk`
+    : `🟢 On Track — solid output, no blockers, work is progressing well
+🟡 At Risk — some items waiting a long time for review, or minor blockers
+🔴 Off Track — very little output, many open blockers, or sustained low activity`;
+
+  // Custom format instruction
+  const formatInstruction = config.customFormat
+    ? `The user has provided a custom standup format. Follow it exactly, filling in the placeholders with real content from the contribution data:\n\n${config.customFormat}`
+    : `Produce the standup message using this exact format (replace the placeholder text with real content):
+
+${milestoneHeaderLines ? milestoneHeaderLines + '\n' : ''}Status: [choose one: 🟢 On Track | 🟡 At Risk | 🔴 Off Track]
+
+*Key updates and Risks:*
+- [bullet summarising a key thing completed ${lookbackPeriod} — reference specific PR title or issue name]
+- [another key update or risk / blocker]
+(continue for all significant items)
+
+*Next Steps:*
+- [main priority for ${timeframe}]
+- [another priority]
+
+*PRs that need attention from the team:*
+- [PR title] — [full PR URL]
+(or "None pending" if all PRs are merged)`;
 
   return `You are generating a professional async standup update for ${profile.currentPosition} at ${profile.companyName}.
+This message will be pasted directly into Slack. Output ONLY the standup message — no preamble, no explanation, no markdown code fences, no JSON.
 
-STANDUP FREQUENCY: ${frequency.toUpperCase()} — ${frequency === 'daily' ? 'Keep bullet points concise. Focus on what was done yesterday and what is planned today.' : "Provide slightly more context. Summarize the week's progress and priorities."}
-${milestoneSection}
-═══════════════════════════════════════════════════════════════
-CONTRIBUTION DATA (use this as the factual basis):
-═══════════════════════════════════════════════════════════════
-Merged PRs (${mergedPRs.length} total):
-${mergedPRs.slice(0, 15).map(pr => `- "${pr.title}" (${pr.repo})`).join('\n') || '- None'}
+STANDUP FREQUENCY: ${frequency.toUpperCase()} — ${frequency === 'daily' ? 'Keep bullet points concise. Focus on what was done yesterday and what is planned for today.' : "Provide slightly more detail. Summarise the week's progress and set clear priorities."}
 
-Open PRs (${openPRs.length} total):
-${openPRs.slice(0, 10).map(pr => `- "${pr.title}" (${pr.repo}) — ${pr.url}`).join('\n') || '- None'}
+═══════════════════════════════════════════════════════════════
+CONTRIBUTION DATA (use this as the factual basis — every item listed here is real):
+═══════════════════════════════════════════════════════════════
+Merged PRs (${mergedPRs.length} total — include the most impactful ones in key updates):
+${mergedPRs.slice(0, 50).map(pr => `- ${pr.title} (${pr.repo})${pr.url && pr.url !== '#' ? ` — ${pr.url}` : ''}`).join('\n') || '- None'}
+
+Open PRs requiring team review (${openPRs.length} total — list ALL of these in "PRs that need attention"):
+${openPRs.slice(0, 30).map(pr => `- ${pr.title} (${pr.repo}) — ${pr.url}`).join('\n') || '- None'}
 
 Open Issues (${openIssues.length} total):
-${openIssues.slice(0, 10).map(i => `- "${i.title}" (${i.repo})`).join('\n') || '- None'}
-
-Recent commits:
-${recentCommits.map(c => `- ${c.message.split('\n')[0]} (${c.repo})`).join('\n') || '- None'}
+${openIssues.slice(0, 15).map(i => `- ${i.title} (${i.repo}) — ${i.state}`).join('\n') || '- None'}
 
 Code reviews given (${stats.totalReviews} total, ${stats.approvedReviews} approved):
-${contributions.reviews.slice(0, 8).map(r => `- ${r.state}: "${r.prTitle}" — ${r.prUrl}`).join('\n') || '- None'}
+${contributions.reviews.slice(0, 12).map(r => {
+  const label = r.state === 'APPROVED' ? 'approved' : r.state === 'CHANGES_REQUESTED' ? 'requested changes on' : 'commented on';
+  return `- ${label}: "${r.prTitle}" (${r.repo})${r.prUrl ? ` — ${r.prUrl}` : ''}`;
+}).join('\n') || '- None'}
 
-In-progress tickets:
-${inProgressTickets.slice(0, 5).map(t => `- [${t.key}] ${t.title} (${t.status})`).join('\n') || '- None'}
+${inProgressTickets.length > 0 ? `In-progress tickets:\n${inProgressTickets.slice(0, 5).map(t => `- [${t.key}] ${t.title} (${t.status})`).join('\n')}` : ''}
+${recentCommits.length > 0 ? `\nNotable commits:\n${recentCommits.map(c => `- ${c.message.split('\n')[0]} (${c.repo})`).join('\n')}` : ''}
 
-Overall stats: ${stats.mergedPRs} merged PRs, ${stats.totalAdditions.toLocaleString()} lines added, ${stats.totalDeletions.toLocaleString()} lines deleted across ${stats.reposContributed} repos
-
-═══════════════════════════════════════════════════════════════
-STANDUP TEMPLATE FOR REFERENCE:
-═══════════════════════════════════════════════════════════════
-${templateNote}
+Overall: ${stats.mergedPRs} merged PRs · ${stats.totalAdditions.toLocaleString()} lines added · ${stats.totalDeletions.toLocaleString()} lines deleted · ${stats.reposContributed} repo(s) · ${stats.totalReviews} reviews given
 
 ═══════════════════════════════════════════════════════════════
 INSTRUCTIONS:
 ═══════════════════════════════════════════════════════════════
 ${scopingInstruction}
 
-Return a JSON object with EXACTLY these keys:
-
-{
-  "suggestedStatus": "on-track" | "at-risk" | "off-track",
-  "keyUpdates": "Bullet list of what was completed ${lookbackPeriod}${hasMilestone ? ' and any blockers or risks to the target date' : '. Group by theme/area when covering multiple workstreams'}",
-  "nextSteps": "Bullet list of main priorities for ${timeframe}",
-  "prsNeedingAttention": "List of PR titles and URLs that need team review, or 'None pending' if all are merged"
-}
-
-Determine status:
+Choose the status based on the evidence:
 ${statusGuidance}
 
+${formatInstruction}
+
 Rules:
-- Use bullet points (- item) within each value string
-- Keep items concise and factual — reference specific PR titles and issues by name
-- For "prsNeedingAttention", include the PR URL when available
-- Output ONLY valid JSON — no preamble, no explanation, no markdown code fences`;
+- Use Slack formatting: *bold* for section headers, - for bullets, bare URLs (no markdown links)
+- Every bullet must reference a specific PR title, issue name, or metric — no vague filler
+- List ALL open PRs in the "PRs that need attention" section with their full URLs
+- Do NOT wrap output in code fences, do NOT output JSON, do NOT add any text before or after the standup message`;
 }
 
 export function parseQuestions(rawText: string): string[] {
