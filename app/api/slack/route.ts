@@ -48,7 +48,7 @@ function parseKVArgs(text: string): Record<string, string> {
   const pattern = /(\w+):(?:"([^"]+)"|(\S+))/g;
   let match;
   while ((match = pattern.exec(text)) !== null) {
-    result[match[1]] = (match[2] || match[3]).replace(/_/g, ' ');
+    result[match[1]] = match[2] || match[3];
   }
   return result;
 }
