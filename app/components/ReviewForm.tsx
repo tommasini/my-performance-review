@@ -12,6 +12,7 @@ interface ReviewFormProps {
   companyValues?: string;
   additionalContext?: string;
   claudeApiKey?: string;
+  setClaudeApiKey?: (key: string) => void;
 }
 
 export default function ReviewForm({
@@ -21,10 +22,14 @@ export default function ReviewForm({
   companyValues,
   additionalContext,
   claudeApiKey,
+  setClaudeApiKey,
 }: ReviewFormProps) {
   const { contributions, stats } = data;
   const [questions, setQuestions] = useState<ParsedQuestion[]>([]);
   const [rateLimitInfo, setRateLimitInfo] = useState<{ remaining: number; remainingDaily: number } | null>(null);
+  const [globalError, setGlobalError] = useState<string | null>(null);
+  const [localApiKey, setLocalApiKey] = useState('');
+  const [pendingQuestionId, setPendingQuestionId] = useState<string | null>(null);
 
   // Parse questions when customQuestions changes
   useEffect(() => {
@@ -96,8 +101,11 @@ export default function ReviewForm({
       }
     } catch (error: any) {
       console.error('Error generating AI answer:', error);
-      alert(error.message || 'Failed to generate AI answer. Please try again.');
-      
+      const msg = error.message || 'Failed to generate AI answer. Please try again.';
+      setGlobalError(msg);
+      if (msg.toLowerCase().includes('api key')) {
+        setPendingQuestionId(questionId);
+      }
       setQuestions((prev) =>
         prev.map((q) => (q.id === questionId ? { ...q, isLoading: false } : q))
       );
@@ -210,6 +218,53 @@ https://performance-review.ai
                 Free tier: {rateLimitInfo.remaining} generations remaining this minute, {rateLimitInfo.remainingDaily} remaining today
               </span>
             </div>
+          </div>
+        )}
+
+        {/* Inline error + API key prompt */}
+        {globalError && (
+          <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg text-sm">
+            <p className="text-red-700 mb-3">{globalError}</p>
+            {globalError.toLowerCase().includes('api key') && (
+              <div className="space-y-2">
+                <p className="text-xs text-red-600">Enter your Claude API key to continue:</p>
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={localApiKey}
+                    onChange={(e) => setLocalApiKey(e.target.value)}
+                    placeholder="sk-ant-..."
+                    className="flex-1 px-3 py-1.5 border border-red-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-400 bg-white"
+                  />
+                  <button
+                    onClick={() => {
+                      if (setClaudeApiKey) setClaudeApiKey(localApiKey);
+                      setGlobalError(null);
+                      if (pendingQuestionId) {
+                        setPendingQuestionId(null);
+                        generateAIAnswer(pendingQuestionId);
+                      }
+                    }}
+                    disabled={!localApiKey.trim()}
+                    className="px-4 py-1.5 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Save &amp; Retry
+                  </button>
+                  <button
+                    onClick={() => setGlobalError(null)}
+                    className="px-3 py-1.5 bg-gray-200 text-gray-600 rounded-lg text-sm hover:bg-gray-300 transition-colors"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+                <p className="text-xs text-red-500">
+                  Get your key at{' '}
+                  <a href="https://console.anthropic.com/" target="_blank" rel="noopener noreferrer" className="underline hover:text-red-700">
+                    console.anthropic.com
+                  </a>
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>

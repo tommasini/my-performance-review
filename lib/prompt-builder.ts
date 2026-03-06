@@ -1,4 +1,4 @@
-import { ContributionData, ContributionStats, UserProfile, PullRequest, Commit } from '@/app/types';
+import { ContributionData, ContributionStats, UserProfile, PullRequest, Commit, StandupConfig } from '@/app/types';
 
 /**
  * Categorize PRs by inferred type based on title keywords
@@ -211,6 +211,129 @@ ${companyValues ? `
 
 ═══════════════════════════════════════════════════════════════
 Now write a compelling, evidence-based answer that will make a strong impression on reviewers.`;
+}
+
+const DEFAULT_STANDUP_TEMPLATE_WITH_MILESTONE = `Milestone (link to epic/bug): {milestone}
+Original Target Date: {originalTargetDate}
+Target Date: {targetDate}
+Status: {status}
+Key updates and Risks: {keyUpdates}
+Next Steps: {nextSteps}
+PRs that need attention from the team: {prsNeedingAttention}`;
+
+const DEFAULT_STANDUP_TEMPLATE_NO_MILESTONE = `Status: {status}
+Key updates and Risks: {keyUpdates}
+Next Steps: {nextSteps}
+PRs that need attention from the team: {prsNeedingAttention}`;
+
+export function buildStandupPrompt(
+  config: StandupConfig,
+  contributions: ContributionData,
+  stats: ContributionStats,
+  profile: UserProfile,
+): string {
+  const frequency = config.frequency;
+  const hasMilestone = !!(config.milestone && config.milestone.trim().length > 0);
+  const openPRs = contributions.pullRequests.filter(pr => pr.state === 'open');
+  const mergedPRs = contributions.pullRequests.filter(pr => pr.state === 'merged' || pr.mergedAt);
+  const openIssues = contributions.issues.filter(i => i.state === 'open');
+  const recentCommits = getSignificantCommits(contributions.commits).slice(0, 10);
+  const timeframe = frequency === 'daily' ? 'today' : 'this week';
+  const lookbackPeriod = frequency === 'daily' ? 'yesterday' : 'last week';
+
+  const inProgressTickets = contributions.tickets.filter(
+    t => t.status.toLowerCase().includes('progress') || t.status.toLowerCase().includes('review')
+  );
+
+  // Build the template reference shown to the AI
+  let templateNote: string;
+  if (config.customFormat) {
+    templateNote = `The user has provided a custom standup format. Adapt the JSON fields to match it:\n${config.customFormat}`;
+  } else if (hasMilestone) {
+    templateNote = DEFAULT_STANDUP_TEMPLATE_WITH_MILESTONE
+      .replace('{milestone}', `${config.milestone}${config.epicLink ? ` ${config.epicLink}` : ''}`)
+      .replace('{originalTargetDate}', config.originalTargetDate || 'N/A')
+      .replace('{targetDate}', config.targetDate || 'N/A');
+  } else {
+    templateNote = DEFAULT_STANDUP_TEMPLATE_NO_MILESTONE;
+  }
+
+  // Milestone section — only included when a milestone was provided
+  const milestoneSection = hasMilestone ? `
+═══════════════════════════════════════════════════════════════
+MILESTONE CONTEXT:
+═══════════════════════════════════════════════════════════════
+Milestone: ${config.milestone}${config.epicLink ? `\nEpic/Bug Link: ${config.epicLink}` : ''}${config.originalTargetDate ? `\nOriginal Target Date: ${config.originalTargetDate}` : ''}${config.targetDate ? `\nTarget Date: ${config.targetDate}` : ''}
+` : '';
+
+  // Scoping instruction — focus on milestone work vs. full breadth
+  const scopingInstruction = hasMilestone
+    ? `Focus the analysis on work related to the milestone "${config.milestone}". Reference the target date when assessing status.`
+    : `No specific milestone was provided. Analyze ALL contributions across the period. Identify natural groupings or themes (e.g. by repo, feature area, or type of work — bug fixes, new features, reviews, etc.) and present "keyUpdates" grouped by theme where meaningful. Cover the full breadth of work done.`;
+
+  // Status determination guidance
+  const statusGuidance = hasMilestone
+    ? `- "on-track": Steady progress, no blockers, target date is achievable
+- "at-risk": PRs awaiting review, minor blockers, or tight deadline
+- "off-track": Significant blockers, missed deliverables, or target date clearly at risk`
+    : `- "on-track": Good output, no blockers, work is progressing well
+- "at-risk": Some open items or PRs waiting a long time for review
+- "off-track": Very little output, many open blockers, or sustained low activity`;
+
+  return `You are generating a professional async standup update for ${profile.currentPosition} at ${profile.companyName}.
+
+STANDUP FREQUENCY: ${frequency.toUpperCase()} — ${frequency === 'daily' ? 'Keep bullet points concise. Focus on what was done yesterday and what is planned today.' : "Provide slightly more context. Summarize the week's progress and priorities."}
+${milestoneSection}
+═══════════════════════════════════════════════════════════════
+CONTRIBUTION DATA (use this as the factual basis):
+═══════════════════════════════════════════════════════════════
+Merged PRs (${mergedPRs.length} total):
+${mergedPRs.slice(0, 15).map(pr => `- "${pr.title}" (${pr.repo})`).join('\n') || '- None'}
+
+Open PRs (${openPRs.length} total):
+${openPRs.slice(0, 10).map(pr => `- "${pr.title}" (${pr.repo}) — ${pr.url}`).join('\n') || '- None'}
+
+Open Issues (${openIssues.length} total):
+${openIssues.slice(0, 10).map(i => `- "${i.title}" (${i.repo})`).join('\n') || '- None'}
+
+Recent commits:
+${recentCommits.map(c => `- ${c.message.split('\n')[0]} (${c.repo})`).join('\n') || '- None'}
+
+Code reviews given (${stats.totalReviews} total, ${stats.approvedReviews} approved):
+${contributions.reviews.slice(0, 8).map(r => `- ${r.state}: "${r.prTitle}" — ${r.prUrl}`).join('\n') || '- None'}
+
+In-progress tickets:
+${inProgressTickets.slice(0, 5).map(t => `- [${t.key}] ${t.title} (${t.status})`).join('\n') || '- None'}
+
+Overall stats: ${stats.mergedPRs} merged PRs, ${stats.totalAdditions.toLocaleString()} lines added, ${stats.totalDeletions.toLocaleString()} lines deleted across ${stats.reposContributed} repos
+
+═══════════════════════════════════════════════════════════════
+STANDUP TEMPLATE FOR REFERENCE:
+═══════════════════════════════════════════════════════════════
+${templateNote}
+
+═══════════════════════════════════════════════════════════════
+INSTRUCTIONS:
+═══════════════════════════════════════════════════════════════
+${scopingInstruction}
+
+Return a JSON object with EXACTLY these keys:
+
+{
+  "suggestedStatus": "on-track" | "at-risk" | "off-track",
+  "keyUpdates": "Bullet list of what was completed ${lookbackPeriod}${hasMilestone ? ' and any blockers or risks to the target date' : '. Group by theme/area when covering multiple workstreams'}",
+  "nextSteps": "Bullet list of main priorities for ${timeframe}",
+  "prsNeedingAttention": "List of PR titles and URLs that need team review, or 'None pending' if all are merged"
+}
+
+Determine status:
+${statusGuidance}
+
+Rules:
+- Use bullet points (- item) within each value string
+- Keep items concise and factual — reference specific PR titles and issues by name
+- For "prsNeedingAttention", include the PR URL when available
+- Output ONLY valid JSON — no preamble, no explanation, no markdown code fences`;
 }
 
 export function parseQuestions(rawText: string): string[] {

@@ -36,20 +36,34 @@ export class GitHubAdapter implements DataSourceAdapter {
     };
 
     const orgFilter = organization ? `org:${organization}` : '';
+    // May be cleared mid-fetch if the org is inaccessible (GitHub returns 422)
+    let effectiveOrgFilter = orgFilter;
 
     // Search for Pull Requests
     onProgress?.({ stage: 'pullRequests', current: 0 });
     try {
-      const prQuery = `type:pr author:${username} ${orgFilter} created:${dateRange.start}..${dateRange.end} is:pr`.trim();
       let prSearchPage = 1;
       let hasMorePRs = true;
 
       while (hasMorePRs) {
-        const { data: prSearchResults } = await octokit.search.issuesAndPullRequests({
-          q: prQuery,
-          per_page: 100,
-          page: prSearchPage,
-        });
+        const prQuery = `type:pr author:${username} ${effectiveOrgFilter} created:${dateRange.start}..${dateRange.end} is:pr`.replace(/\s+/g, ' ').trim();
+        let prSearchResults: Awaited<ReturnType<typeof octokit.search.issuesAndPullRequests>>['data'];
+
+        try {
+          const res = await octokit.search.issuesAndPullRequests({ q: prQuery, per_page: 100, page: prSearchPage });
+          prSearchResults = res.data;
+        } catch (err: unknown) {
+          const httpErr = err as { status?: number };
+          if (httpErr.status === 422 && effectiveOrgFilter) {
+            console.warn('GitHub PR search 422 with org filter — retrying without org scope.');
+            effectiveOrgFilter = '';
+            const fallbackQuery = `type:pr author:${username} created:${dateRange.start}..${dateRange.end} is:pr`;
+            const res = await octokit.search.issuesAndPullRequests({ q: fallbackQuery, per_page: 100, page: prSearchPage });
+            prSearchResults = res.data;
+          } else {
+            throw err;
+          }
+        }
 
         onProgress?.({ stage: 'pullRequests', current: contributions.pullRequests.length, total: prSearchResults.total_count });
 
@@ -99,16 +113,28 @@ export class GitHubAdapter implements DataSourceAdapter {
     // Search for Issues
     onProgress?.({ stage: 'issues', current: 0 });
     try {
-      const issueQuery = `type:issue author:${username} ${orgFilter} created:${dateRange.start}..${dateRange.end}`.trim();
       let issueSearchPage = 1;
       let hasMoreIssues = true;
 
       while (hasMoreIssues) {
-        const { data: issueSearchResults } = await octokit.search.issuesAndPullRequests({
-          q: issueQuery,
-          per_page: 100,
-          page: issueSearchPage,
-        });
+        const issueQuery = `type:issue author:${username} ${effectiveOrgFilter} created:${dateRange.start}..${dateRange.end}`.replace(/\s+/g, ' ').trim();
+        let issueSearchResults: Awaited<ReturnType<typeof octokit.search.issuesAndPullRequests>>['data'];
+
+        try {
+          const res = await octokit.search.issuesAndPullRequests({ q: issueQuery, per_page: 100, page: issueSearchPage });
+          issueSearchResults = res.data;
+        } catch (err: unknown) {
+          const httpErr = err as { status?: number };
+          if (httpErr.status === 422 && effectiveOrgFilter) {
+            console.warn('GitHub issue search 422 with org filter — retrying without org scope.');
+            effectiveOrgFilter = '';
+            const fallbackQuery = `type:issue author:${username} created:${dateRange.start}..${dateRange.end}`;
+            const res = await octokit.search.issuesAndPullRequests({ q: fallbackQuery, per_page: 100, page: issueSearchPage });
+            issueSearchResults = res.data;
+          } else {
+            throw err;
+          }
+        }
 
         onProgress?.({ stage: 'issues', current: contributions.issues.length, total: issueSearchResults.total_count });
 
@@ -145,17 +171,29 @@ export class GitHubAdapter implements DataSourceAdapter {
     // Fetch PR Reviews
     onProgress?.({ stage: 'reviews', current: 0 });
     try {
-      const reviewQuery = `type:pr reviewed-by:${username} ${orgFilter} updated:${dateRange.start}..${dateRange.end}`.trim();
       let reviewSearchPage = 1;
       let hasMoreReviewPRs = true;
       const reviewedPRs = new Map<string, { owner: string; repo: string; fullRepo: string; number: number; title: string; url: string }>();
 
       while (hasMoreReviewPRs) {
-        const { data: reviewSearchResults } = await octokit.search.issuesAndPullRequests({
-          q: reviewQuery,
-          per_page: 100,
-          page: reviewSearchPage,
-        });
+        const reviewQuery = `type:pr reviewed-by:${username} ${effectiveOrgFilter} updated:${dateRange.start}..${dateRange.end}`.replace(/\s+/g, ' ').trim();
+        let reviewSearchResults: Awaited<ReturnType<typeof octokit.search.issuesAndPullRequests>>['data'];
+
+        try {
+          const res = await octokit.search.issuesAndPullRequests({ q: reviewQuery, per_page: 100, page: reviewSearchPage });
+          reviewSearchResults = res.data;
+        } catch (err: unknown) {
+          const httpErr = err as { status?: number };
+          if (httpErr.status === 422 && effectiveOrgFilter) {
+            console.warn('GitHub review search 422 with org filter — retrying without org scope.');
+            effectiveOrgFilter = '';
+            const fallbackQuery = `type:pr reviewed-by:${username} updated:${dateRange.start}..${dateRange.end}`;
+            const res = await octokit.search.issuesAndPullRequests({ q: fallbackQuery, per_page: 100, page: reviewSearchPage });
+            reviewSearchResults = res.data;
+          } else {
+            throw err;
+          }
+        }
 
         for (const prItem of reviewSearchResults.items) {
           const repoMatch = prItem.repository_url.match(/\/repos\/([^/]+)\/([^/]+)$/);
@@ -275,10 +313,3 @@ export class GitHubAdapter implements DataSourceAdapter {
 }
 
 export const createGitHubAdapter = (): DataSourceAdapter => new GitHubAdapter();
-
-
-
-
-
-
-

@@ -141,3 +141,24 @@ export interface RateLimitInfo {
   isLimited: boolean;
 }
 
+// Standup Types
+export type AppMode = 'performance-review' | 'standup';
+export type StandupFrequency = 'daily' | 'weekly';
+export type StandupStatus = 'on-track' | 'at-risk' | 'off-track';
+
+export interface StandupConfig {
+  frequency: StandupFrequency;
+  milestone?: string;
+  epicLink?: string;
+  originalTargetDate?: string;
+  targetDate?: string;
+  customFormat?: string; // overrides the default template when provided
+}
+
+export interface StandupOutput {
+  status: StandupStatus;
+  keyUpdates: string;
+  nextSteps: string;
+  prsNeedingAttention: string;
+}
+

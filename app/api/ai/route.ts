@@ -1,19 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { checkRateLimit, checkAbuse } from '@/lib/rate-limit';
 import { generateAIResponse } from '@/lib/ai-providers';
-import { buildPrompt } from '@/lib/prompt-builder';
-import { ContributionData, ContributionStats, UserProfile } from '@/app/types';
+import { buildPrompt, buildStandupPrompt } from '@/lib/prompt-builder';
+import { ContributionData, ContributionStats, UserProfile, StandupConfig } from '@/app/types';
 
 export const maxDuration = 60; // Allow up to 60 seconds for AI response
 
 interface AIRequestBody {
-  question: string;
+  mode?: 'performance-review' | 'standup';
+  question?: string;
   contributions: ContributionData;
   stats: ContributionStats;
   profile: UserProfile;
   companyValues?: string;
   additionalContext?: string;
-  userApiKey?: string; // User's own Claude API key (optional)
+  userApiKey?: string;
+  standupConfig?: StandupConfig;
 }
 
 export async function POST(request: NextRequest) {
@@ -29,14 +31,33 @@ export async function POST(request: NextRequest) {
 
     // 2. Parse request body
     const body: AIRequestBody = await request.json();
-    const { question, contributions, stats, profile, companyValues, additionalContext, userApiKey } = body;
+    const {
+      mode = 'performance-review',
+      question,
+      contributions,
+      stats,
+      profile,
+      companyValues,
+      additionalContext,
+      userApiKey,
+      standupConfig,
+    } = body;
 
-    // 3. Validate required fields
-    if (!question || !contributions || !stats || !profile) {
-      return NextResponse.json(
-        { error: 'Missing required fields: question, contributions, stats, and profile are required' },
-        { status: 400 }
-      );
+    // 3. Validate required fields per mode
+    if (mode === 'standup') {
+      if (!contributions || !stats || !profile || !standupConfig) {
+        return NextResponse.json(
+          { error: 'Missing required fields for standup: contributions, stats, profile, and standupConfig are required' },
+          { status: 400 }
+        );
+      }
+    } else {
+      if (!question || !contributions || !stats || !profile) {
+        return NextResponse.json(
+          { error: 'Missing required fields: question, contributions, stats, and profile are required' },
+          { status: 400 }
+        );
+      }
     }
 
     // 4. Rate limiting - only apply if using server key
@@ -68,14 +89,9 @@ export async function POST(request: NextRequest) {
     }
 
     // 5. Build the prompt
-    const prompt = buildPrompt(
-      question,
-      contributions,
-      stats,
-      profile,
-      companyValues,
-      additionalContext
-    );
+    const prompt = mode === 'standup'
+      ? buildStandupPrompt(standupConfig!, contributions, stats, profile)
+      : buildPrompt(question!, contributions, stats, profile, companyValues, additionalContext);
 
     // 6. Generate AI response with fallback
     const result = await generateAIResponse(prompt, userApiKey);

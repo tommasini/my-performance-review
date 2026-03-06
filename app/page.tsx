@@ -2,17 +2,20 @@
 
 import { useState, useEffect } from 'react';
 import { format, startOfYear } from 'date-fns';
-import { UserProfile, DataSourceConfig, FetchedData, ContributionData, ContributionStats } from './types';
+import { UserProfile, DataSourceConfig, FetchedData, ContributionData, ContributionStats, AppMode, StandupConfig } from './types';
 import ContributionsView from './components/ContributionsView';
 import ReviewForm from './components/ReviewForm';
 import ProfileSetup from './components/ProfileSetup';
 import QuestionsInput from './components/QuestionsInput';
+import StandupConfigComponent from './components/StandupConfig';
+import StandupReview from './components/StandupReview';
 import Donations from './components/Donations';
 
-type Step = 'setup' | 'questions' | 'fetch' | 'review';
+type Step = 'setup' | 'questions' | 'standup-config' | 'fetch' | 'review' | 'standup-review';
 type InputMode = 'fetch' | 'manual';
 
-const STEP_ORDER: Step[] = ['setup', 'questions', 'fetch', 'review'];
+const PERF_REVIEW_STEPS: Step[] = ['setup', 'questions', 'fetch', 'review'];
+const STANDUP_STEPS: Step[] = ['setup', 'standup-config', 'fetch', 'standup-review'];
 
 // Example template for manual input
 const MANUAL_INPUT_EXAMPLE = `# My Contributions
@@ -176,9 +179,12 @@ function parseManualInput(input: string, startDate: string, endDate: string): Fe
 export default function Home() {
   // Current step in the wizard
   const [currentStep, setCurrentStep] = useState<Step>('setup');
-  
+
   // Track the furthest step reached (for navigation)
   const [maxReachedStep, setMaxReachedStep] = useState<Step>('setup');
+
+  // App mode: performance review or async standup
+  const [appMode, setAppMode] = useState<AppMode>('performance-review');
 
   // Profile state
   const [profile, setProfile] = useState<UserProfile>({
@@ -196,11 +202,16 @@ export default function Home() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
-  // Questions state
+  // Performance review state
   const [customQuestions, setCustomQuestions] = useState('');
   const [companyValues, setCompanyValues] = useState('');
   const [additionalContext, setAdditionalContext] = useState('');
   const [claudeApiKey, setClaudeApiKey] = useState('');
+
+  // Standup state
+  const [standupConfig, setStandupConfig] = useState<StandupConfig>({
+    frequency: 'daily',
+  });
 
   // Input mode state (fetch from APIs or manual input)
   const [inputMode, setInputMode] = useState<InputMode>('fetch');
@@ -211,10 +222,15 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<FetchedData | null>(null);
 
+  // Derive step order from current mode
+  const currentStepOrder = appMode === 'standup' ? STANDUP_STEPS : PERF_REVIEW_STEPS;
+  const finalStep: Step = appMode === 'standup' ? 'standup-review' : 'review';
+  const secondStep: Step = appMode === 'standup' ? 'standup-config' : 'questions';
+
   // Helper to update maxReachedStep when navigating forward
   const navigateToStep = (step: Step) => {
-    const stepIndex = STEP_ORDER.indexOf(step);
-    const maxIndex = STEP_ORDER.indexOf(maxReachedStep);
+    const stepIndex = currentStepOrder.indexOf(step);
+    const maxIndex = currentStepOrder.indexOf(maxReachedStep);
     if (stepIndex > maxIndex) {
       setMaxReachedStep(step);
     }
@@ -223,11 +239,18 @@ export default function Home() {
 
   // Check if user can navigate to a specific step
   const canNavigateToStep = (step: Step) => {
-    const stepIndex = STEP_ORDER.indexOf(step);
-    const maxIndex = STEP_ORDER.indexOf(maxReachedStep);
-    // Can always go to current step or earlier, or any previously reached step
-    // Also allow going to review if data exists
-    return stepIndex <= maxIndex || (step === 'review' && data !== null);
+    const stepIndex = currentStepOrder.indexOf(step);
+    const maxIndex = currentStepOrder.indexOf(maxReachedStep);
+    return stepIndex <= maxIndex || (step === finalStep && data !== null);
+  };
+
+  // Handle mode selection from setup — resets wizard state for the chosen path
+  const handleSelectMode = (mode: AppMode) => {
+    setAppMode(mode);
+    setData(null);
+    const nextStep: Step = mode === 'standup' ? 'standup-config' : 'questions';
+    setMaxReachedStep(nextStep);
+    setCurrentStep(nextStep);
   };
 
   // Initialize dates on client-side
@@ -286,9 +309,8 @@ export default function Home() {
       }
 
       setData(result);
-      // Mark review step as reachable and navigate to it
-      setMaxReachedStep('review');
-      setCurrentStep('review');
+      setMaxReachedStep(finalStep);
+      setCurrentStep(finalStep);
     } catch (err: unknown) {
       const error = err as Error & { name?: string };
       if (error.name === 'AbortError') {
@@ -314,51 +336,51 @@ export default function Home() {
     setError(null);
     const parsedData = parseManualInput(manualInput, startDate, endDate);
     setData(parsedData);
-    setMaxReachedStep('review');
-    setCurrentStep('review');
+    setMaxReachedStep(finalStep);
+    setCurrentStep(finalStep);
   };
 
-  const canProceedToQuestions = () => {
-    // Allow proceeding if using manual mode (don't need data sources configured)
-    if (inputMode === 'manual') {
-      return (
-        profile.currentPosition &&
-        profile.companyName &&
-        startDate &&
-        endDate
-      );
-    }
-    // For fetch mode, need at least one data source
-    return (
+  const canProceedFromSetup = () => {
+    const baseValid =
       profile.currentPosition &&
       profile.companyName &&
       startDate &&
-      endDate &&
-      dataSources.some((ds) => ds.enabled && ds.username)
-    );
+      endDate;
+    if (inputMode === 'manual') return !!baseValid;
+    return !!(baseValid && dataSources.some((ds) => ds.enabled && ds.username));
   };
 
   const canProceedToFetch = () => {
+    if (appMode === 'standup') {
+      return true; // all standup fields are optional; frequency always has a default
+    }
     return customQuestions.trim().length > 20;
   };
 
   const renderStepIndicator = () => {
-    const steps = [
-      { key: 'setup', label: 'Setup', icon: '👤' },
-      { key: 'questions', label: 'Questions', icon: '❓' },
-      { key: 'fetch', label: 'Contributions', icon: '📊' },
-      { key: 'review', label: 'Review', icon: '✍️' },
-    ];
+    const steps = appMode === 'standup'
+      ? [
+          { key: 'setup', label: 'Setup', icon: '👤' },
+          { key: 'standup-config', label: 'Standup', icon: '📋' },
+          { key: 'fetch', label: 'Contributions', icon: '📊' },
+          { key: 'standup-review', label: 'Output', icon: '📝' },
+        ]
+      : [
+          { key: 'setup', label: 'Setup', icon: '👤' },
+          { key: 'questions', label: 'Questions', icon: '❓' },
+          { key: 'fetch', label: 'Contributions', icon: '📊' },
+          { key: 'review', label: 'Review', icon: '✍️' },
+        ];
 
     const currentIndex = steps.findIndex((s) => s.key === currentStep);
-    const maxReachedIndex = STEP_ORDER.indexOf(maxReachedStep);
+    const maxReachedIndex = currentStepOrder.indexOf(maxReachedStep);
 
     return (
       <div className="flex items-center justify-center mb-8">
         {steps.map((step, idx) => {
           const stepKey = step.key as Step;
           const isNavigable = canNavigateToStep(stepKey);
-          const isCompleted = idx < maxReachedIndex || (stepKey === 'review' && data !== null);
+          const isCompleted = idx < maxReachedIndex || (stepKey === finalStep && data !== null);
           const isCurrent = step.key === currentStep;
 
           return (
@@ -403,10 +425,12 @@ export default function Home() {
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-blue-600 via-purple-600 to-indigo-600 bg-clip-text text-transparent mb-3">
-            Performance Review AI
+            {appMode === 'standup' ? 'Async Standup AI' : 'Performance Review AI'}
           </h1>
           <p className="text-gray-600 text-lg max-w-2xl mx-auto mb-4">
-            Generate compelling performance review answers powered by AI, based on your actual contributions
+            {appMode === 'standup'
+              ? 'Generate professional async standup updates powered by AI, based on your actual contributions'
+              : 'Generate compelling performance review answers powered by AI, based on your actual contributions'}
           </p>
           {/* Donation Buttons */}
           <div className="flex items-center justify-center gap-3 mt-4">
@@ -452,18 +476,51 @@ export default function Home() {
                 endDate={endDate}
                 setEndDate={setEndDate}
               />
-              
-              <div className="flex justify-end">
-                <button
-                  onClick={() => navigateToStep('questions')}
-                  disabled={!canProceedToQuestions()}
-                  className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors font-medium flex items-center gap-2"
-                >
-                  Continue to Questions
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  </svg>
-                </button>
+
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                <p className="text-sm font-medium text-gray-700 mb-4 text-center">
+                  What would you like to generate?
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <button
+                    onClick={() => handleSelectMode('performance-review')}
+                    disabled={!canProceedFromSetup()}
+                    className="group flex flex-col items-start gap-2 px-5 py-4 bg-blue-50 border-2 border-blue-200 rounded-xl hover:border-blue-400 hover:bg-blue-100 disabled:bg-gray-50 disabled:border-gray-200 disabled:cursor-not-allowed transition-all text-left"
+                  >
+                    <div className="flex items-center gap-2 font-semibold text-blue-700 group-disabled:text-gray-400">
+                      <span className="text-xl">✍️</span>
+                      Performance Review
+                      <svg className="w-4 h-4 ml-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                    </div>
+                    <p className="text-xs text-blue-600 group-disabled:text-gray-400">
+                      Answer performance review questions with AI-generated, evidence-based responses from your contributions.
+                    </p>
+                  </button>
+
+                  <button
+                    onClick={() => handleSelectMode('standup')}
+                    disabled={!canProceedFromSetup()}
+                    className="group flex flex-col items-start gap-2 px-5 py-4 bg-indigo-50 border-2 border-indigo-200 rounded-xl hover:border-indigo-400 hover:bg-indigo-100 disabled:bg-gray-50 disabled:border-gray-200 disabled:cursor-not-allowed transition-all text-left"
+                  >
+                    <div className="flex items-center gap-2 font-semibold text-indigo-700 group-disabled:text-gray-400">
+                      <span className="text-xl">📋</span>
+                      Async Standup
+                      <svg className="w-4 h-4 ml-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                    </div>
+                    <p className="text-xs text-indigo-600 group-disabled:text-gray-400">
+                      Generate a daily or weekly async standup update with status, risks, next steps, and PRs needing attention.
+                    </p>
+                  </button>
+                </div>
+                {!canProceedFromSetup() && (
+                  <p className="mt-3 text-xs text-center text-amber-600">
+                    Complete your profile, date range, and at least one data source above to continue.
+                  </p>
+                )}
               </div>
             </>
           )}
@@ -492,10 +549,9 @@ export default function Home() {
                   Back
                 </button>
                 <div className="flex gap-2">
-                  {/* Show "Go to Review" if data was already fetched */}
                   {data && (
                     <button
-                      onClick={() => navigateToStep('review')}
+                      onClick={() => navigateToStep(finalStep)}
                       className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium flex items-center gap-2"
                     >
                       Go to Review
@@ -508,6 +564,52 @@ export default function Home() {
                     onClick={() => navigateToStep('fetch')}
                     disabled={!canProceedToFetch()}
                     className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors font-medium flex items-center gap-2"
+                  >
+                    {data ? 'Update Contributions' : 'Continue to Contributions'}
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+
+          {currentStep === 'standup-config' && (
+            <>
+              <StandupConfigComponent
+                standupConfig={standupConfig}
+                setStandupConfig={setStandupConfig}
+                claudeApiKey={claudeApiKey}
+                setClaudeApiKey={setClaudeApiKey}
+              />
+
+              <div className="flex justify-between">
+                <button
+                  onClick={() => navigateToStep('setup')}
+                  className="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors font-medium flex items-center gap-2"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                  Back
+                </button>
+                <div className="flex gap-2">
+                  {data && (
+                    <button
+                      onClick={() => navigateToStep(finalStep)}
+                      className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium flex items-center gap-2"
+                    >
+                      Go to Output
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                    </button>
+                  )}
+                  <button
+                    onClick={() => navigateToStep('fetch')}
+                    disabled={!canProceedToFetch()}
+                    className="px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors font-medium flex items-center gap-2"
                   >
                     {data ? 'Update Contributions' : 'Continue to Contributions'}
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -700,7 +802,7 @@ export default function Home() {
 
               <div className="flex justify-between">
                 <button
-                  onClick={() => navigateToStep('questions')}
+                  onClick={() => navigateToStep(secondStep)}
                   disabled={loading}
                   className="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 disabled:opacity-50 transition-colors font-medium flex items-center gap-2"
                 >
@@ -709,13 +811,12 @@ export default function Home() {
                   </svg>
                   Back
                 </button>
-                {/* Show "Go to Review" if data was already fetched */}
                 {data && !loading && (
                   <button
-                    onClick={() => navigateToStep('review')}
+                    onClick={() => navigateToStep(finalStep)}
                     className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium flex items-center gap-2"
                   >
-                    Go to Review
+                    {appMode === 'standup' ? 'Go to Output' : 'Go to Review'}
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                     </svg>
@@ -735,8 +836,33 @@ export default function Home() {
                 companyValues={companyValues}
                 additionalContext={additionalContext}
                 claudeApiKey={claudeApiKey}
+                setClaudeApiKey={setClaudeApiKey}
               />
               
+              <div className="flex justify-between">
+                <button
+                  onClick={() => navigateToStep('fetch')}
+                  className="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors font-medium flex items-center gap-2"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                  Refetch Data
+                </button>
+              </div>
+            </>
+          )}
+
+          {currentStep === 'standup-review' && data && (
+            <>
+              <StandupReview
+                data={data}
+                profile={profile}
+                standupConfig={standupConfig}
+                claudeApiKey={claudeApiKey}
+                setClaudeApiKey={setClaudeApiKey}
+              />
+
               <div className="flex justify-between">
                 <button
                   onClick={() => navigateToStep('fetch')}
@@ -754,7 +880,7 @@ export default function Home() {
 
         {/* Donations - More prominent after completing review */}
         <div className="mt-12">
-          <Donations showAfterReview={currentStep === 'review'} />
+          <Donations showAfterReview={currentStep === 'review' || currentStep === 'standup-review'} />
         </div>
 
         {/* Footer */}
