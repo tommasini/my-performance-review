@@ -122,7 +122,8 @@ export class GitLabAdapter implements DataSourceAdapter {
   async fetchContributions(
     config: DataSourceConfig,
     dateRange: DateRange,
-    onProgress?: ProgressCallback
+    onProgress?: ProgressCallback,
+    _options?: import('./types').FetchOptions
   ): Promise<ContributionData> {
     const contributions: ContributionData = {
       pullRequests: [],

@@ -1,5 +1,6 @@
 import { DataSourceConfig, ContributionData, ContributionStats, StandupConfig, UserProfile } from '@/app/types';
 import { getAdapter, DateRange } from '@/lib/data-sources';
+import type { FetchOptions } from '@/lib/data-sources/types';
 import { buildStandupPrompt } from '@/lib/prompt-builder';
 import { generateAIResponse } from '@/lib/ai-providers';
 
@@ -80,12 +81,14 @@ export async function runStandupPipeline(params: StandupPipelineParams): Promise
     throw new Error('No enabled data sources with a username configured.');
   }
 
+  const fetchOpts: FetchOptions = { mode: 'activity' };
+
   const fetchResults = await Promise.all(
     enabledSources.map(async (source) => {
       const adapter = getAdapter(source.type);
       try {
-        console.log(`[standup-pipeline] Fetching contributions from ${source.type}...`);
-        const contributions = await adapter.fetchContributions(source, dateRange);
+        console.log(`[standup-pipeline] Fetching activity from ${source.type}...`);
+        const contributions = await adapter.fetchContributions(source, dateRange, undefined, fetchOpts);
         console.log(`[standup-pipeline] Got ${contributions.pullRequests.length} PRs, ${contributions.reviews.length} reviews from ${source.type}`);
         return contributions;
       } catch (error) {

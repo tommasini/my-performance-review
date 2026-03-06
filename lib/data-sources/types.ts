@@ -19,6 +19,24 @@ export interface FetchProgress {
 export type ProgressCallback = (progress: FetchProgress) => void;
 
 /**
+ * Controls what the adapter optimises for when searching contributions.
+ *
+ * - 'history'  (default) — used by Performance Review.
+ *   Searches for items *created* in the date range to build a comprehensive
+ *   historical record: all PRs you opened, all issues you filed, etc.
+ *
+ * - 'activity' — used by Async Standup.
+ *   Searches for items *active* in the date range: PRs you merged, open PRs
+ *   you recently pushed to, issues you touched. Answers "what did I do today?"
+ *   rather than "what did I open this quarter?"
+ */
+export type FetchMode = 'activity' | 'history';
+
+export interface FetchOptions {
+  mode?: FetchMode;
+}
+
+/**
  * Base interface for all data source adapters.
  * Each adapter (GitHub, GitLab, Bitbucket, Jira) implements this interface.
  */
@@ -33,12 +51,14 @@ export interface DataSourceAdapter {
    * @param config - Configuration including username, organization, token, etc.
    * @param dateRange - Start and end dates for the query
    * @param onProgress - Optional callback for progress updates
+   * @param options  - Optional fetch options (mode: 'activity' | 'history')
    * @returns Promise resolving to contribution data
    */
   fetchContributions(
     config: DataSourceConfig,
     dateRange: DateRange,
-    onProgress?: ProgressCallback
+    onProgress?: ProgressCallback,
+    options?: FetchOptions
   ): Promise<ContributionData>;
 
   /**

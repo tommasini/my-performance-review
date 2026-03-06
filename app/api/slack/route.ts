@@ -69,9 +69,13 @@ async function postToSlack(responseUrl: string, text: string, inChannel = true):
 function dateRangeForFrequency(frequency: 'daily' | 'weekly'): { startDate: string; endDate: string } {
   const now = new Date();
   const today = format(now, 'yyyy-MM-dd');
+  // Daily uses a 2-day lookback (2 days ago → today) to safely cover remote
+  // teams across all timezones: a UTC+14 / UTC-12 spread means "yesterday"
+  // can shift up to 2 calendar days relative to the server's UTC clock.
+  // Weekly uses 9 days for the same reason.
   const startDate = frequency === 'daily'
-    ? format(subDays(now, 1), 'yyyy-MM-dd')
-    : format(subDays(now, 7), 'yyyy-MM-dd');
+    ? format(subDays(now, 2), 'yyyy-MM-dd')
+    : format(subDays(now, 9), 'yyyy-MM-dd');
   return { startDate, endDate: today };
 }
 
